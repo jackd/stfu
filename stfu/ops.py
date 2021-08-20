@@ -141,11 +141,7 @@ def _boolean_mask(
     indices = tf.unstack(indices, axis=-1)
     indices[axis] = dense_hash_table_index_lookup(gather_indices, indices[axis])
     indices = tf.stack(indices, axis=-1)
-    a = tf.SparseTensor(
-        indices,
-        tf.boolean_mask(a.values, values_mask),
-        dense_shape,
-    )
+    a = tf.SparseTensor(indices, tf.boolean_mask(a.values, values_mask), dense_shape)
     return (a, values_mask)
 
 
@@ -280,9 +276,7 @@ def static_hash_table_index_lookup(
 
 
 def gather(
-    a: tf.SparseTensor,
-    indices: tf.Tensor,
-    axis: int = 0,
+    a: tf.SparseTensor, indices: tf.Tensor, axis: int = 0,
 ):
     """
     `tf.SparseTensor` equivalent to `tf.gather`.

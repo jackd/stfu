@@ -9,7 +9,8 @@ pip install git+https://github.com/jackd/tfbm.git
 """
 
 import tensorflow as tf
-from tfbm import benchmark, Benchmark
+from tfbm import Benchmark, benchmark
+
 from stfu import ops
 
 tf.random.set_seed(0)

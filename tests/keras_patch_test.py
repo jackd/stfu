@@ -1,4 +1,5 @@
 import tensorflow as tf
+
 import stfu.keras_patch  # pylint: disable=unused-import
 
 
