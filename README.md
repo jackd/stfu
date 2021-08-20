@@ -1,8 +1,15 @@
-# python-pkg
+# [Sparse TensorFlow Utilities](https://github.com/jackd/stfu)
 
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-TODO: Update title, add basic description.
+Contains:
+
+- basic operations
+  - pad
+  - gather
+  - boolean_mask
+- keras layer for construction via components
+- path to add `dense_shape` attribute to sparse `KerasTensor`s
 
 ## Pre-commit
 
