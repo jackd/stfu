@@ -17,9 +17,9 @@ def squeeze(st: tf.SparseTensor, axis=None) -> tf.SparseTensor:
         axis = tuple(i for i in range(st.shape.ndims) if st.shape[i] == 1)
     else:
         if isinstance(axis, int):
-            axis = (canonicalize_axis(axis, st.shape.ndims),)
+            axis = (axis,)
         else:
-            assert hasattr(axis, "__iter__")
+            assert hasattr(axis, "__iter__"), axis
         axis = [canonicalize_axis(a, st.shape.ndims) for a in axis]
         assert all(isinstance(a, int) for a in axis), axis
         axis = np.unique(axis)  # remove duplicates / sort
@@ -32,7 +32,7 @@ def squeeze(st: tf.SparseTensor, axis=None) -> tf.SparseTensor:
         del remaining[a]
     dense_shape = tf.gather(st.dense_shape, remaining)
     indices = tf.gather(st.indices, remaining, axis=1)
-    return tf.SparseTensor(indices, st.values, dense_shape)
+    return sparse_tensor(indices, st.values, dense_shape)
 
 
 def stack(values: tp.Sequence[tf.SparseTensor], axis: int = 0) -> tf.SparseTensor:
@@ -109,58 +109,7 @@ def pad(st: tf.SparseTensor, paddings) -> tf.SparseTensor:
     """Similar to `tf.pad` but accepts `SparseTensor` inputs."""
     shape = st.shape if st.shape.is_fully_defined() else st.dense_shape
     indices, shape = pad_grid(st.indices, shape, paddings)
-    return tf.SparseTensor(indices, st.values, shape)
-
-
-def _boolean_mask(
-    a: tf.SparseTensor,
-    mask: tf.Tensor,
-    axis: int,
-    gather_indices: tf.Tensor,
-    out_size: tf.Tensor,
-):
-    """
-    `SparseTensor` equivalent to tf.boolean_mask.
-
-    Args:
-        a: rank-k `tf.SparseTensor` with `nnz` non-zeros.
-        mask: rank-1 bool Tensor.
-        axis: int, axis on which to mask. Must be in [-k, k).
-        gather_indices: pre-computed `tf.where(mask)`
-        out_size: number of true entries in mask, tf.size(gather_indices).
-
-    Returns:
-        masked_a: SparseTensor masked along the given axis.
-        values_mask: [nnz] bool Tensor indicating surviving non-zeros.
-    """
-    axis = canonicalize_axis(axis, a.shape.ndims)
-    mask = tf.convert_to_tensor(mask, tf.bool)
-    values_mask = tf.gather(mask, a.indices[:, axis], axis=0)
-    dense_shape = tf.tensor_scatter_nd_update(a.dense_shape, [[axis]], [out_size])
-    indices = tf.boolean_mask(a.indices, values_mask)
-    indices = tf.unstack(indices, axis=-1)
-    indices[axis] = dense_hash_table_index_lookup(gather_indices, indices[axis])
-    indices = tf.stack(indices, axis=-1)
-    a = tf.SparseTensor(indices, tf.boolean_mask(a.values, values_mask), dense_shape)
-    return (a, values_mask)
-
-
-def boolean_mask(a: tf.SparseTensor, mask: tf.Tensor, axis: int = 0):
-    """
-    `SparseTensor` equivalent to `tf.boolean_mask`.
-
-    Args:
-        a: rank-k `tf.SparseTensor`.
-        mask: rank-1 bool tensor.
-        axis: axis along which to mask.
-
-    Returns:
-        masked_a: `tf.SparseTensor` masked along the given axis.
-        values_mask: [nnz] bool tensor indicating surviving values.
-    """
-    i = tf.squeeze(tf.cast(tf.where(mask), tf.int64), axis=1)
-    out_size = tf.math.count_nonzero(mask)
-    return _boolean_mask(a, mask, axis=axis, gather_indices=i, out_size=out_size)
+    return sparse_tensor(indices, st.values, shape)
 
 
 def indices_to_mask(indices: tf.Tensor, shape: tf.Tensor, dtype: tf.DType = tf.bool):
@@ -222,6 +171,19 @@ def to_dense_index_lookup(
     return tf.gather(x, query)
 
 
+def _dense_hash_table_index_lookup(args):
+    indices, query = args
+    values = tf.range(tf.size(indices, tf.int64), dtype=tf.int64)
+    table = tf.lookup.experimental.DenseHashTable(tf.int64, tf.int64, -1, -1, -2)
+    assert indices.dtype == tf.int64
+    assert values.dtype == tf.int64
+    assert query.dtype == tf.int64
+    table.insert(indices, values)
+    result = tf.reshape(table.lookup(tf.reshape(query, (-1,))), tf.shape(query))
+    table.erase(indices)
+    return result
+
+
 def dense_hash_table_index_lookup(indices: tf.Tensor, query: tf.Tensor) -> tf.Tensor:
     """
     Get the index into `indices` associated with `query` values.
@@ -237,15 +199,7 @@ def dense_hash_table_index_lookup(indices: tf.Tensor, query: tf.Tensor) -> tf.Te
     Returns:
         [nq] index of `indices` for each entry in `query`.
     """
-    values = tf.range(tf.size(indices, tf.int64), dtype=tf.int64)
-    table = tf.lookup.experimental.DenseHashTable(tf.int64, tf.int64, -1, -1, -2)
-    assert indices.dtype == tf.int64
-    assert values.dtype == tf.int64
-    assert query.dtype == tf.int64
-    table.insert(indices, values)
-    result = tf.reshape(table.lookup(tf.reshape(query, (-1,))), tf.shape(query))
-    table.erase(indices)
-    return result
+    return tf.keras.layers.Lambda(_dense_hash_table_index_lookup)((indices, query))
 
 
 def static_hash_table_index_lookup(
@@ -275,8 +229,68 @@ def static_hash_table_index_lookup(
     return result
 
 
+def _boolean_mask(
+    a: tf.SparseTensor,
+    mask: tf.Tensor,
+    axis: int,
+    gather_indices: tf.Tensor,
+    out_size: tf.Tensor,
+    return_values_mask: bool = False,
+):
+    """
+    `SparseTensor` equivalent to tf.boolean_mask.
+
+    Args:
+        a: rank-k `tf.SparseTensor` with `nnz` non-zeros.
+        mask: rank-1 bool Tensor.
+        axis: int, axis on which to mask. Must be in [-k, k).
+        gather_indices: pre-computed `tf.where(mask)`
+        out_size: number of true entries in mask, tf.size(gather_indices).
+
+    Returns:
+        masked_a: SparseTensor masked along the given axis.
+        values_mask: [nnz] bool Tensor indicating surviving non-zeros.
+    """
+    axis = canonicalize_axis(axis, a.shape.ndims)
+    mask = tf.convert_to_tensor(mask, tf.bool)
+    values_mask = tf.gather(mask, a.indices[:, axis], axis=0)
+    dense_shape = tf.tensor_scatter_nd_update(a.dense_shape, [[axis]], [out_size])
+    indices = tf.boolean_mask(a.indices, values_mask)
+    indices = tf.unstack(indices, axis=-1)
+    indices[axis] = dense_hash_table_index_lookup(gather_indices, indices[axis])
+    indices = tf.stack(indices, axis=-1)
+    a = sparse_tensor(indices, tf.boolean_mask(a.values, values_mask), dense_shape)
+    return (a, values_mask) if return_values_mask else a
+
+
+def boolean_mask(
+    a: tf.SparseTensor, mask: tf.Tensor, axis: int = 0, return_values_mask: bool = False
+):
+    """
+    `SparseTensor` equivalent to `tf.boolean_mask`.
+
+    Args:
+        a: rank-k `tf.SparseTensor`.
+        mask: rank-1 bool tensor.
+        axis: axis along which to mask.
+        return_values_mask: include `values_mask` in return
+
+    Returns:
+        If `return_values_mask`, returns `masked_a, values_mask`, otherwise just
+            `masked_a`.
+        masked_a: `tf.SparseTensor` masked along the given axis.
+        values_mask: [nnz] bool tensor indicating surviving values.
+    """
+    i = tf.squeeze(tf.cast(tf.where(mask), tf.int64), axis=1)
+    out_size = tf.math.count_nonzero(mask)
+    return _boolean_mask(a, mask, axis=axis, gather_indices=i, out_size=out_size)
+
+
 def gather(
-    a: tf.SparseTensor, indices: tf.Tensor, axis: int = 0,
+    a: tf.SparseTensor,
+    indices: tf.Tensor,
+    axis: int = 0,
+    return_values_mask: bool = False,
 ):
     """
     `tf.SparseTensor` equivalent to `tf.gather`.
@@ -287,31 +301,41 @@ def gather(
         a: rank-k `tf.SparseTensor` with `nnz` non-zeros.
         indices: rank-1 int Tensor, rows or columns to keep.
         axis: int axis to apply gather to.
+        return_values_mask: flag to return `values_mask`.
 
     Returns:
-        gathered_a: SparseTensor gathered along the given axis.
-    """
-    gathered, _ = gather_and_mask(a, indices, axis)
-    return gathered
-
-
-def gather_and_mask(a: tf.SparseTensor, indices: tf.Tensor, axis: int = 0):
-    """
-    `tf.SparseTensor` equivalent to `tf.gather`, but also returns `values_mask`.
-
-    Assumes `indices` are sorted.
-
-    Args:
-        a: rank-k `tf.SparseTensor` with `nnz` non-zeros.
-        indices: rank-1 int Tensor, rows or columns to keep.
-        axis: int axis to apply gather to.
-
-    Returns:
-        gathered_a: SparseTensor masked along the given axis.
-        values_mask: bool Tensor indicating surviving values, shape [nnz].
+        If `return_values_mask`, returns `gathered_a, values_mask`, otherwise just
+            `gathered_a`.
+        gathered_a: `tf.SparseTensor` masked along the given axis.
+        values_mask: [nnz] bool tensor indicating surviving values.
     """
     indices = tf.convert_to_tensor(indices, tf.int64)
     in_size = a.dense_shape[axis]
     out_size = tf.size(indices)
     mask = indices_to_mask(indices, in_size)
-    return _boolean_mask(a, mask, axis=axis, gather_indices=indices, out_size=out_size)
+    return _boolean_mask(
+        a,
+        mask,
+        axis=axis,
+        gather_indices=indices,
+        out_size=out_size,
+        return_values_mask=return_values_mask,
+    )
+
+
+@tf.keras.utils.register_keras_serializable(package="stfu")
+class SparseTensorLayer(tf.keras.layers.Layer):
+    def call(self, args):
+        return tf.SparseTensor(*args)
+
+
+def sparse_tensor(
+    indices: tf.Tensor, values: tf.Tensor, dense_shape: tf.Tensor
+) -> tf.SparseTensor:
+    """Create a SparseTensor, possibly via a keras layer."""
+    if not tf.is_tensor(dense_shape):
+        dense_shape = tf.convert_to_tensor(dense_shape, tf.int64)
+    args = (indices, values, dense_shape)
+    if any(tf.keras.backend.is_keras_tensor(t) for t in args):
+        return SparseTensorLayer()(args)
+    return tf.SparseTensor(*args)
