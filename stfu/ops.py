@@ -112,7 +112,9 @@ def pad(st: tf.SparseTensor, paddings) -> tf.SparseTensor:
     return sparse_tensor(indices, st.values, shape)
 
 
-def indices_to_mask(indices: tf.Tensor, shape: tf.Tensor, dtype: tf.DType = tf.bool):
+def indices_to_mask(
+    indices: tf.Tensor, shape: tf.Tensor, dtype: tf.DType = tf.bool
+) -> tf.Tensor:
     """
     Get a mask with true values at indices of the given shape.
 
@@ -202,6 +204,37 @@ def dense_hash_table_index_lookup(indices: tf.Tensor, query: tf.Tensor) -> tf.Te
     return tf.keras.layers.Lambda(_dense_hash_table_index_lookup)((indices, query))
 
 
+def _mutable_hash_table_index_lookup(args):
+    indices, query = args
+    values = tf.range(tf.size(indices, tf.int64), dtype=tf.int64)
+    table = tf.lookup.experimental.MutableHashTable(tf.int64, tf.int64, -1)
+    assert indices.dtype == tf.int64
+    assert values.dtype == tf.int64
+    assert query.dtype == tf.int64
+    table.insert(indices, values)
+    result = tf.reshape(table.lookup(tf.reshape(query, (-1,))), tf.shape(query))
+    table.remove(indices)
+    return result
+
+
+def mutable_hash_table_index_lookup(indices: tf.Tensor, query: tf.Tensor) -> tf.Tensor:
+    """
+    Get the index into `indices` associated with `query` values.
+
+    Implementation based on `tf.lookup.experimental.DenseHashTable`. For small maximum
+    `indices`, `to_dense_index_lookup` may be faster.
+
+    Args:
+        indices: [ni] original indices.
+        query: [nq], same dtype as `indices`. Every value of `query` should be in
+            `indices`.
+
+    Returns:
+        [nq] index of `indices` for each entry in `query`.
+    """
+    return tf.keras.layers.Lambda(_mutable_hash_table_index_lookup)((indices, query))
+
+
 def static_hash_table_index_lookup(
     indices: tf.Tensor, query: tf.Tensor, default_value: tp.Optional[tf.Tensor] = None
 ) -> tf.Tensor:
@@ -257,7 +290,7 @@ def _boolean_mask(
     dense_shape = tf.tensor_scatter_nd_update(a.dense_shape, [[axis]], [out_size])
     indices = tf.boolean_mask(a.indices, values_mask)
     indices = tf.unstack(indices, axis=-1)
-    indices[axis] = dense_hash_table_index_lookup(gather_indices, indices[axis])
+    indices[axis] = mutable_hash_table_index_lookup(gather_indices, indices[axis])
     indices = tf.stack(indices, axis=-1)
     a = sparse_tensor(indices, tf.boolean_mask(a.values, values_mask), dense_shape)
     return (a, values_mask) if return_values_mask else a
@@ -339,3 +372,8 @@ def sparse_tensor(
     if any(tf.keras.backend.is_keras_tensor(t) for t in args):
         return SparseTensorLayer()(args)
     return tf.SparseTensor(*args)
+
+
+def sparse_ones(indices, dense_shape, dtype: tf.DType = tf.float32) -> tf.SparseTensor:
+    values = tf.ones((tf.shape(indices)[0],), dtype=dtype)
+    return tf.SparseTensor(indices, values, dense_shape)

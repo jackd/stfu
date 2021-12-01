@@ -42,18 +42,18 @@ class LookupBenchmark(Benchmark):
         max_val = tf.convert_to_tensor(max_val, tf.int64)
         query = tf.convert_to_tensor(query, tf.int64)
         return ops.to_dense_index_lookup(indices, query, max_val)
-        x = tf.scatter_nd(
-            tf.expand_dims(indices, axis=-1),
-            tf.range(tf.shape(indices, out_type=tf.int64)[0]),
-            tf.expand_dims(max_val, axis=-1),
-        )
-        return tf.gather(x, query)
 
-    @benchmark(args=(indices, max_val, query))
-    def dense_hash_table_index_lookup(self, indices, max_val, query):
+    @benchmark(args=(indices, query))
+    def dense_hash_table_index_lookup(self, indices, query):
         indices = tf.convert_to_tensor(indices, tf.int64)
         query = tf.convert_to_tensor(query, tf.int64)
         return ops.dense_hash_table_index_lookup(indices, query)
+
+    @benchmark(args=(indices, query))
+    def mutable_hash_table_index_lookup(self, indices, query):
+        indices = tf.convert_to_tensor(indices, tf.int64)
+        query = tf.convert_to_tensor(query, tf.int64)
+        return ops.mutable_hash_table_index_lookup(indices, query)
 
     # @benchmark(args=(indices, max_val, query))
     # def sparse_has_table_lookup(self, indices, max_val, query):

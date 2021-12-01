@@ -105,6 +105,13 @@ class OpsTest(tf.test.TestCase, parameterized.TestCase):
         actual = ops.dense_hash_table_index_lookup(indices, query)
         self.assertAllEqual(actual, expected)
 
+    def test_mutable_hash_table_index_lookup(self):
+        indices = tf.constant([0, 2, 5, 7, 10], tf.int64)
+        query = tf.constant([5, 2, 2, 10], tf.int64)
+        expected = tf.constant([2, 1, 1, 4], tf.int64)
+        actual = ops.mutable_hash_table_index_lookup(indices, query)
+        self.assertAllEqual(actual, expected)
+
     def test_static_hash_table_index_lookup(self):
         indices = tf.constant([0, 2, 5, 7, 10], tf.int64)
         query = tf.constant([5, 2, 2, 10], tf.int64)
