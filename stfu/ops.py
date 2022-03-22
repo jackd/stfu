@@ -30,7 +30,7 @@ def squeeze(st: tf.SparseTensor, axis=None) -> tf.SparseTensor:
     remaining = list(range(st.shape.ndims))
     for a in axis[-1::-1]:
         del remaining[a]
-    dense_shape = tf.gather(st.dense_shape, remaining)
+    dense_shape = tf.gather(st.dense_shape, remaining, axis=0)
     indices = tf.gather(st.indices, remaining, axis=1)
     return sparse_tensor(indices, st.values, dense_shape)
 
@@ -160,17 +160,18 @@ def to_dense_index_lookup(
         index_bound: scalar bound on `indices`.
 
     Returns:
-        [nq] index of `indices` for each entry in `query`.
+        [nq] index of `indices` for each entry in `query`. If `query` value is not in
+            `indices`, the corresponding returned value is -1.
     """
     indices = tf.convert_to_tensor(indices, tf.int64)
     index_bound = tf.convert_to_tensor(index_bound, tf.int64)
     query = tf.convert_to_tensor(query, tf.int64)
     x = tf.scatter_nd(
         tf.expand_dims(indices, axis=-1),
-        tf.range(tf.shape(indices, out_type=tf.int64)[0]),
+        tf.range(1, 1 + tf.shape(indices, out_type=tf.int64)[0]),
         tf.expand_dims(index_bound, axis=-1),
     )
-    return tf.gather(x, query)
+    return tf.gather(x, query, axis=0) - 1
 
 
 def _dense_hash_table_index_lookup(args):
@@ -377,3 +378,10 @@ def sparse_tensor(
 def sparse_ones(indices, dense_shape, dtype: tf.DType = tf.float32) -> tf.SparseTensor:
     values = tf.ones((tf.shape(indices)[0],), dtype=dtype)
     return tf.SparseTensor(indices, values, dense_shape)
+
+
+def diag(values: tf.Tensor) -> tf.SparseTensor:
+    values.shape.assert_has_rank(1)
+    size = tf.size(values, tf.int64)
+    i = tf.range(size)
+    return tf.SparseTensor(tf.tile(tf.expand_dims(i, 1), (1, 2)), values, (size, size))
